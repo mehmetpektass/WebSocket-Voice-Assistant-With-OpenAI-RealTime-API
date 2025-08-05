@@ -80,8 +80,6 @@ document.getElementById("voiceBtn").addEventListener("click", async () => {
         // ScriptProcessor – 16384 samples for better buffering
         processor = audioCtx.createScriptProcessor(16384, 1, 1);
 
-        stopAllPlayback();
-
         processor.onaudioprocess = (e) => {
             if (isMuted) {
                 // Still process audio for visualization but don't send
@@ -234,12 +232,6 @@ function playAudio(arrayBuf) {
     activeSources.push(src);
 }
 
-function stopAllPlayback() {            // <── yeni yardımcı
-    activeSources.forEach(s => { try { s.stop(); } catch (e) { } });
-    activeSources.length = 0;   
-    playbackTime = playAudioCtx ? playAudioCtx.currentTime : 0;
-}
-
 
 let isMuted = false;
 const muteBtn = document.getElementById("muteBtn");
@@ -253,9 +245,7 @@ muteBtn.addEventListener("click", () => {
         ? "Muted (listening)"
         : "Speak";
 
-    
-        console.warn("Ws is not open, cannot send mute_state");
-      
+    console.warn("Ws is not open, cannot send mute_state");  
 });
 
 
