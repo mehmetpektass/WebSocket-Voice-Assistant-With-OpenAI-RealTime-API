@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Voice Assistant</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>🤖 AI Voice Assistant</h1>
+    <div class="visualizer">
+      <canvas id="audioVisualizer"></canvas>
+    </div>
+    <div class="controls-container">
+      <div class="btn-row">
+        <button id="voiceBtn" class="voice-btn">🎤</button>
+        <button id="muteBtn" class="muteBtn" title="Mute microphone">🔇</button>
+      </div>
+    </div>
+    
+    <div class="status" id="status">Bağlantı bekleniyor...</div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
