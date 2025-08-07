@@ -1,10 +1,9 @@
 import express from "express";
 import dotenv from 'dotenv';
-import { RealtimeAgent, RealtimeSession } from '@openai/agents/realtime';
 import { WebSocketServer } from "ws";
-import http from "http"
+import WebSocket from "ws";
+import http from "http";
 import path from "path";
-
 
 dotenv.config();
 
@@ -14,232 +13,275 @@ const wss = new WebSocketServer({ server });
 
 app.use(express.static(path.join(process.cwd(), "client")));
 
-//For WebSocket connection
-wss.on("connection", async (ws) => {
-    console.log("New WebSocket connection established");
+// OpenAI Realtime API WebSocket URL
+const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
 
-    const agent = new RealtimeAgent({
-        name: 'Assistant',
-        instructions: `
-        You are a multilingual voice assistant. You are friendly, helpful, and speak in a polite and concise tone.
+wss.on("connection", async (clientWs) => {
+    console.log("New client WebSocket connection established");
 
-        Supported languages:
-        - English (en)
-        - Spanish (es)
-        - Turkish (tr)
-        - French (fr)
-        - German (de)
-        - Italian (it)
-
-        Instructions:
-        - When the user speaks in one of the supported languages, always reply in that same language.
-        - Never switch languages unless the user switches.
-        - If the user speaks in a language you do not support, reply in English and say: "I'm sorry, I currently support only English, Spanish, Turkish, French, German, and Italian."
-        - Do not attempt to translate, detect or guess unsupported languages.
-        - Keep your responses natural, clear, and not overly formal.
-
-        Important:
-        - Do not mix languages in the same response.
-        - Always maintain the conversation in the user's language, as long as it is supported.
-        `
+    // Connect to OpenAI's Realtime API
+    const openaiWs = new WebSocket(OPENAI_REALTIME_URL, {
+        headers: {
+            "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+            "OpenAI-Beta": "realtime=v1",
+        },
     });
 
-    const session = new RealtimeSession(agent, {
-        apiKey: process.env.OPENAI_API_KEY,
-        transport: 'websocket',
-        voice: "alloy",
-        model: 'gpt-4o-realtime-preview-2025-06-03',
-        config: {
-            inputAudioFormat: 'pcm16',
-            outputAudioFormat: 'pcm16',
-            inputAudioTranscription: { model: 'whisper-1'},
-            turnDetection: {
-                type: 'server_vad',
-                threshold: 0.5,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 800
+    let sessionConfigured = false;
+
+    openaiWs.on("open", () => {
+        console.log("Connected to OpenAI Realtime API");
+        
+        // Configure session according to OpenAI documentation
+        const sessionUpdate = {
+            type: "session.update",
+            session: {
+                modalities: ["text", "audio"],
+                instructions: `You are a multilingual voice assistant. You are friendly, helpful, and speak in a polite and concise tone.
+
+                Supported languages:
+                - English (en)
+                - Spanish (es)
+                - Turkish (tr)
+                - French (fr)
+                - German (de)
+                - Italian (it)
+
+                Instructions:
+                - When the user speaks in one of the supported languages, always reply in that same language.
+                - Never switch languages unless the user switches.
+                - If the user speaks in a language you do not support, reply in English and say: "I'm sorry, I currently support only English, Spanish, Turkish, French, German, and Italian."
+                - Do not attempt to translate, detect or guess unsupported languages.
+                - Keep your responses natural, clear, and not overly formal.
+
+                Important:
+                - Do not mix languages in the same response.
+                - Always maintain the conversation in the user's language, as long as it is supported.`,
+                voice: "alloy",
+                input_audio_format: "pcm16",
+                output_audio_format: "pcm16",
+                input_audio_transcription: {
+                    model: "whisper-1"
+                },
+                turn_detection: {
+                    type: "server_vad",
+                    threshold: 0.7,
+                    prefix_padding_ms: 300,
+                    silence_duration_ms: 800
+                },
+                temperature: 0.8,
+                max_response_output_tokens: 4096
             }
+        };
+
+        openaiWs.send(JSON.stringify(sessionUpdate));
+        sessionConfigured = true;
+
+        // Send session info to client
+        clientWs.send(JSON.stringify({
+            type: "session",
+            data: {
+                status: "connected",
+                model: "gpt-4o-realtime-preview-2024-10-01"
+            }
+        }));
+    });
+
+    openaiWs.on("message", (data) => {
+        try {
+            const event = JSON.parse(data.toString());
+            console.log("OpenAI event:", event.type);
+
+            // Forward relevant events to client
+            switch (event.type) {
+                case "session.created":
+                case "session.updated":
+                    console.log("Session configured successfully");
+                    break;
+
+                case "input_audio_buffer.speech_started":
+                    console.log("User speech started");
+                    clientWs.send(JSON.stringify({
+                        type: "speech_started"
+                    }));
+                    break;
+
+                case "input_audio_buffer.speech_stopped":
+                    console.log("User speech stopped");
+                    clientWs.send(JSON.stringify({
+                        type: "speech_stopped"
+                    }));
+                    break;
+
+                case "conversation.item.input_audio_transcription.completed":
+                    console.log("User transcript:", event.transcript);
+                    clientWs.send(JSON.stringify({
+                        type: "user_transcript",
+                        transcript: event.transcript
+                    }));
+                    break;
+
+                case "response.created":
+                    console.log("Response created");
+                    break;
+
+                case "response.output_item.added":
+                    console.log("Output item added");
+                    break;
+
+                case "response.content_part.added":
+                    console.log("Content part added");
+                    break;
+
+                case "response.audio.delta":
+                    // Forward audio data to client
+                    if (event.delta) {
+                        const audioBuffer = Buffer.from(event.delta, 'base64');
+                        clientWs.send(audioBuffer);
+                    }
+                    break;
+
+                case "response.audio_transcript.delta":
+                    console.log("AI transcript delta:", event.delta);
+                    clientWs.send(JSON.stringify({
+                        type: "ai_transcript_delta",
+                        delta: event.delta
+                    }));
+                    break;
+
+                case "response.done":
+                    console.log("Response completed");
+                    clientWs.send(JSON.stringify({
+                        type: "response_done"
+                    }));
+                    break;
+
+                case "error":
+                    console.error("OpenAI error:", event.error);
+                    clientWs.send(JSON.stringify({
+                        type: "error",
+                        error: event.error
+                    }));
+                    break;
+
+                default:
+                    console.log("Unhandled OpenAI event:", event.type);
+            }
+        } catch (error) {
+            console.error("Error parsing OpenAI message:", error);
         }
     });
 
-    await session.connect({ apiKey: process.env.OPENAI_API_KEY });
+    openaiWs.on("error", (error) => {
+        console.error("OpenAI WebSocket error:", error);
+        clientWs.send(JSON.stringify({
+            type: "error",
+            error: { message: "OpenAI connection error" }
+        }));
+    });
 
-    session.on('error', (err) => console.error('Session error:', err));
+    openaiWs.on("close", () => {
+        console.log("OpenAI WebSocket connection closed");
+        clientWs.close();
+    });
 
+    // Handle messages from client
+    clientWs.on("message", async (message, isBinary) => {
+        if (!sessionConfigured) {
+            console.log("Session not configured yet, ignoring message");
+            return;
+        }
 
-    let accumulatedAudio = Buffer.alloc(0);
-    let isRecording = false;
-
-    try {
-        //Send the sound that comes from OpenAI to client directly
-        session.on("conversation.updated", ({ delta }) => {
-            if (!isRecording && delta?.audio && ws.readyState === WebSocket.OPEN) {
-                console.log(`Sending ${delta.audio.buffer.byteLength} bytes of audio to client`);
-                ws.send(Buffer.from(delta.audio.buffer));
-            } else if (delta?.text) {
-                console.log("There is only text", delta.text);
-            }
-        });
-
-        session.on("input_audio_buffer.speech_started", async () => {
-            console.log("User speech started – interrupting AI");
-            isRecording = true;
-            try { await session.interrupt(); } catch (e) { console.log("interrupt err", e); }
-        });
-
-        session.on("input_audio_buffer.speech_stopped", () => {
-            console.log("User speech stopped");
-            isRecording = false;
-        });
-
-
-        // Listen to all transport events for debugging
-        session.transport.on('*', async (event) => {
-            console.log("Transport event:", event.type);
-            if (event.type === 'error') {
-                console.log("Transport error:", event.error);
-            }else if (event.type === "audio_interrupted")
-                try { await session.interrupt(); } catch (e) { console.log("interrupt err", e); }
-
-            // Handle audio data directly from transport events
-            if (event.type === 'response.audio.delta' && event.delta && ws.readyState === WebSocket.OPEN) {
-                console.log('Transport: Sending audio delta to client');
-                const audioBuffer = Buffer.from(event.delta, 'base64');
-                ws.send(audioBuffer);
-            }
-        });
-
-        ws.send(
-            JSON.stringify({
-                type: "session",
-                data: {
-                    model: "gpt-4o-realtime-preview",
-                    session_id: session.id,
-                    voice: session.voice,
-                    model: session.model,
-                    expires_at: Date.now() + 3600000 // 1 hour valid
-                },
-            })
-        );
-
-
-
-        // Handle messages from client
-        ws.on("message", async (message, isBinary) => {
-            try {
-                if (isBinary) {
-                    // Handle binary audio data
-                    if (!isRecording) return;
-
-                    const audioBuffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
-                    if (audioBuffer.length === 0) {
-                        console.log("Received empty audio buffer, skipping");
-                        return;
-                    }
-
-                    accumulatedAudio = Buffer.concat([accumulatedAudio, audioBuffer]);
-
-                    // Send audio in chunks when we have enough data
-                    if (accumulatedAudio.length >= 4800) { // 100ms worth of audio
-                        try {
-                            await session.sendAudio(accumulatedAudio, { commit: false });
-                            console.log(`Sent ${accumulatedAudio.length} bytes to OpenAI`);
-                            accumulatedAudio = Buffer.alloc(0); // Reset buffer
-                        } catch (audioError) {
-                            console.error("Error sending audio to OpenAI:", audioError);
-                        }
-                    }
+        try {
+            if (isBinary) {
+                // Handle binary audio data
+                const audioBuffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
+                if (audioBuffer.length === 0) {
+                    console.log("Received empty audio buffer, skipping");
                     return;
                 }
 
-                // Handle JSON messages
-                const data = JSON.parse(message.toString());
-                console.log("Received JSON message:", data.type);
+                console.log(`Forwarding ${audioBuffer.length} bytes of audio to OpenAI`);
+                
+                // Send audio using input_audio_buffer.append
+                const audioEvent = {
+                    type: "input_audio_buffer.append",
+                    audio: audioBuffer.toString('base64')
+                };
 
-                switch (data.type) {
-                    case "start_conversation":
-                        isRecording = true;
-                        accumulatedAudio = Buffer.alloc(0);
-
-                        try { await session.interrupt(); }
-                        catch (e) { console.log("interrupt err", e); }
-
-                        console.log("Started recording");
-                        ws.send(JSON.stringify({
-                            type: "conversation_started",
-                            message: "Conversation Started",
-                        }));
-                        break;
-
-                    case "stop_conversation":
-                        isRecording = false;
-                        console.log(`Stopping conversation. Buffer size: ${accumulatedAudio.length} bytes`);
-
-                        // Send any remaining audio data and commit it
-                        if (accumulatedAudio.length > 0) {
-                            try {
-                                await session.sendAudio(accumulatedAudio, { commit: true });
-                                console.log(`Sent and committed final ${accumulatedAudio.length} bytes to OpenAI`);
-                            } catch (audioError) {
-                                console.error("Error sending/committing final audio to OpenAI:", audioError);
-                            }
-                        }
-
-
-                        console.log("Server VAD should detect end of speech and generate response automatically");
-
-                        accumulatedAudio = Buffer.alloc(0); // Reset buffer
-
-                        ws.send(JSON.stringify({
-                            type: "conversation_stopped",
-                            message: "Conversation Stopped",
-                        }));
-                        break;
-
-                    case "audio":
-                        if (typeof data.audio === "string" && data.audio.length > 0) {
-                            const audioBuffer = Buffer.from(data.audio, "base64");
-                            if (audioBuffer.length > 0) {
-                                await session.sendAudio(audioBuffer, { commit: false });
-                            }
-                        }
-                        break;
-
-                    case "mute_state":
-                        isMuted = data.muted;
-                        console.log(`Client mute state: ${isMuted}`);
-                        break;
-
-                    case "error":
-                        console.error("Client error:", data.error);
-                        break;
-
-                    default:
-                        console.log("Unknown message type:", data.type);
-                }
-            } catch (error) {
-                console.error("Error processing message:", error);
-                ws.send(JSON.stringify({
-                    type: "error",
-                    error: "Message processing failed"
-                }));
+                openaiWs.send(JSON.stringify(audioEvent));
+                return;
             }
-        });
 
-        // Handle connection close
-        ws.on("close", () => {
-            isRecording = false;
-            session.close();
-            console.log("WebSocket connection closed");
-        });
+            // Handle JSON messages
+            const data = JSON.parse(message.toString());
+            console.log("Received client message:", data.type);
 
-    } catch (error) {
-        console.error("Error creating session:", error);
-        ws.send(JSON.stringify({
-            type: "error",
-            error: "Failed to create session"
-        }));
-    }
+            switch (data.type) {
+                case "start_conversation":
+                    console.log("Starting conversation");
+                    
+                    // Clear any existing audio buffer
+                    openaiWs.send(JSON.stringify({
+                        type: "input_audio_buffer.clear"
+                    }));
+
+                    clientWs.send(JSON.stringify({
+                        type: "conversation_started",
+                        message: "Conversation Started"
+                    }));
+                    break;
+
+                case "stop_conversation":
+                    console.log("Stopping conversation");
+
+                    clientWs.send(JSON.stringify({
+                        type: "conversation_stopped",
+                        message: "Conversation Stopped"
+                    }));
+                    break;
+
+                case "cancel_response":
+                    console.log("Cancelling current response");
+                    openaiWs.send(JSON.stringify({
+                        type: "response.cancel"
+                    }));
+                    break;
+
+                case "create_response":
+                    console.log("Creating response manually");
+                    openaiWs.send(JSON.stringify({
+                        type: "response.create",
+                        response: {
+                            modalities: ["text", "audio"],
+                            instructions: data.instructions || "Please respond to the user."
+                        }
+                    }));
+                    break;
+
+                default:
+                    console.log("Unknown client message type:", data.type);
+            }
+        } catch (error) {
+            console.error("Error processing client message:", error);
+            clientWs.send(JSON.stringify({
+                type: "error",
+                error: { message: "Invalid message format" }
+            }));
+        }
+    });
+
+    // Handle client disconnect
+    clientWs.on("close", () => {
+        console.log("Client WebSocket connection closed");
+        if (openaiWs.readyState === WebSocket.OPEN) {
+            openaiWs.close();
+        }
+    });
+
+    clientWs.on("error", (error) => {
+        console.error("Client WebSocket error:", error);
+    });
 });
 
 app.get("/", (req, res) => {

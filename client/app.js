@@ -1,6 +1,10 @@
 const ws = new WebSocket("ws://localhost:3000");
 ws.binaryType = "arraybuffer";
 
+let isConnected = false;
+let isRecording = false;
+let currentTranscript = "";
+
 ws.onopen = () => {
     console.log("WS connected");
 };
@@ -11,6 +15,8 @@ ws.onerror = (error) => {
 
 ws.onclose = (event) => {
     console.log("WebSocket closed:", event.code, event.reason);
+    isConnected = false;
+    updateStatus("Connection closed");
 };
 
 // Handle messages from server
@@ -20,15 +26,57 @@ ws.onmessage = async (e) => {
         const msg = JSON.parse(e.data);
         console.log("Parsed message:", msg);
 
-        if (msg.type === "session") {
-            document.getElementById("status").textContent = "Bağlantı hazır, konuşabilirsiniz";
-            console.log("Session ready");
-        } else if (msg.type === "conversation_started") {
-            console.log("Conversation started confirmation received");
-        } else if (msg.type === "conversation_stopped") {
-            console.log("Conversation stopped confirmation received");
-        } else if (msg.type === "error") {
-            console.error("Server error:", msg.error);
+        switch (msg.type) {
+            case "session":
+                isConnected = true;
+                updateStatus("Connected - Ready to talk");
+                console.log("Session ready");
+                break;
+
+            case "conversation_started":
+                console.log("Conversation started confirmation received");
+                break;
+
+            case "conversation_stopped":
+                console.log("Conversation stopped confirmation received");
+                break;
+
+            case "speech_started":
+                console.log("User speech detected");
+                updateStatus("Listening...");
+                break;
+
+            case "speech_stopped":
+                console.log("User speech stopped");
+                updateStatus("Processing...");
+                break;
+
+            case "user_transcript":
+                console.log("User said:", msg.transcript);
+                updateTranscript("User: " + msg.transcript);
+                break;
+
+            case "ai_transcript_delta":
+                if (currentTranscript === "") {
+                    currentTranscript = "AI: ";
+                }
+                currentTranscript += msg.delta;
+                updateTranscript(currentTranscript, false);
+                break;
+
+            case "response_done":
+                console.log("AI response completed");
+                updateStatus("Ready to talk");
+                currentTranscript = "";
+                break;
+
+            case "error":
+                console.error("Server error:", msg.error);
+                updateStatus("Error: " + msg.error.message);
+                break;
+
+            default:
+                console.log("Unknown message type:", msg.type);
         }
     } else {
         console.log(`Received binary audio data: ${e.data.byteLength} bytes`);
@@ -37,25 +85,37 @@ ws.onmessage = async (e) => {
 };
 
 let audioCtx, processor, source;
+let isMuted = false;
 
 document.getElementById("voiceBtn").addEventListener("click", async () => {
+    if (!isConnected) {
+        updateStatus("Not connected to server");
+        return;
+    }
+
     if (processor) {
         console.log("Stopping recording...");
         ws.send(JSON.stringify({ type: "stop_conversation" }));
+        
+        // Stop recording
         processor.disconnect();
         source.disconnect();
         await audioCtx.close();
         processor = null;
+        source = null;
+        audioCtx = null;
+        isRecording = false;
+
         document.getElementById("voiceBtn").textContent = "🎤";
-        document.getElementById("status").textContent = "Stoped";
+        updateStatus("Stopped");
         viz.stop();
         return;
-    } else {
-        // Reset mute state on new recording
-        isMuted = false;
-        muteBtn.textContent = "🔇";
-        muteBtn.title = "Mute microphone";
     }
+
+    // Reset mute state on new recording
+    isMuted = false;
+    muteBtn.textContent = "🔇";
+    muteBtn.title = "Mute microphone";
 
     console.log("Starting recording...");
     try {
@@ -68,7 +128,6 @@ document.getElementById("voiceBtn").addEventListener("click", async () => {
             }
         });
 
-        console.log("Got media stream");
         viz.start(stream);
 
         // AudioContext – most browsers open at 48,000 Hz
@@ -77,18 +136,14 @@ document.getElementById("voiceBtn").addEventListener("click", async () => {
 
         source = audioCtx.createMediaStreamSource(stream);
 
-        // ScriptProcessor – 16384 samples for better buffering
-        processor = audioCtx.createScriptProcessor(16384, 1, 1);
+        // ScriptProcessor – 4096 samples for better real-time performance
+        processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
         processor.onaudioprocess = (e) => {
             if (isMuted) {
                 // Still process audio for visualization but don't send
-                const floatBuf = e.inputBuffer.getChannelData(0);
-                // ... (keep visualization code if needed)
                 return;
             }
-
-
 
             const floatBuf = e.inputBuffer.getChannelData(0);
 
@@ -117,16 +172,14 @@ document.getElementById("voiceBtn").addEventListener("click", async () => {
                 return;
             }
 
-            // Send data in appropriate chunks - ensure minimum 100ms (2400 samples)
-            if (pcm16.length >= 2400 && ws.readyState === WebSocket.OPEN) {
+            // Send all audio data to maintain real-time streaming
+            if (ws.readyState === WebSocket.OPEN && isRecording) {
                 if (hasAudio && maxAmplitude > 0.001) {
                     console.log(`Sending ${pcm16.length} samples (${pcm16.byteLength} bytes) to server, max amplitude: ${maxAmplitude.toFixed(4)}`);
                 } else {
                     console.log(`Sending silence: ${pcm16.length} samples`);
                 }
                 ws.send(pcm16.buffer);
-            } else if (pcm16.length > 0) {
-                console.log(`Buffer too small: ${pcm16.length} samples, waiting for more data`);
             }
         };
 
@@ -136,15 +189,17 @@ document.getElementById("voiceBtn").addEventListener("click", async () => {
         // Send start conversation message
         console.log("Sending start_conversation message");
         ws.send(JSON.stringify({ type: "start_conversation" }));
+        isRecording = true;
 
         document.getElementById("voiceBtn").textContent = "⏹️";
-        document.getElementById("status").textContent = "Konuşun…";
+        updateStatus("Recording - Speak now...");
 
     } catch (error) {
         console.error("Error starting recording:", error);
-        document.getElementById("status").textContent = "Mikrofon hatası: " + error.message;
+        updateStatus("Microphone error: " + error.message);
     }
 });
+
 
 function downsample(buffer, inRate, outRate) {
     if (inRate === outRate) return buffer;
@@ -232,8 +287,6 @@ function playAudio(arrayBuf) {
     activeSources.push(src);
 }
 
-
-let isMuted = false;
 const muteBtn = document.getElementById("muteBtn");
 
 // Mute button functionality
@@ -241,13 +294,29 @@ muteBtn.addEventListener("click", () => {
     isMuted = !isMuted;
     muteBtn.textContent = isMuted ? "🔈" : "🔇";
     muteBtn.title = isMuted ? "Unmute microphone" : "Mute microphone";
-    document.getElementById("status").textContent = isMuted
-        ? "Muted (listening)"
-        : "Speak";
-
-    console.warn("Ws is not open, cannot send mute_state");  
+    updateStatus(isMuted ? "Muted (listening paused)" : "Recording - Speak now...");
+    console.log(`Microphone ${isMuted ? 'muted' : 'unmuted'}`);
 });
 
+function updateStatus(message) {
+    document.getElementById("status").textContent = message;
+}
+
+function updateTranscript(text, isComplete = true) {
+    const transcriptEl = document.getElementById("transcript");
+    if (isComplete) {
+        transcriptEl.innerHTML += "<div>" + text + "</div>";
+    } else {
+        // Update the last line for streaming text
+        const lines = transcriptEl.children;
+        if (lines.length > 0) {
+            lines[lines.length - 1].textContent = text;
+        } else {
+            transcriptEl.innerHTML = "<div>" + text + "</div>";
+        }
+    }
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
 
 class AudioVisualizer {
     constructor(canvasId) {
@@ -259,6 +328,7 @@ class AudioVisualizer {
         this.canvas.width = this.canvas.offsetWidth;
         this.canvas.height = this.canvas.offsetHeight;
     }
+
     start(stream) {
         if (!this.audioCtx)
             this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -268,6 +338,7 @@ class AudioVisualizer {
         this.audioCtx.createMediaStreamSource(stream).connect(this.analyser);
         this.draw();
     }
+
     draw() {
         if (!this.analyser) return;
         const bufLen = this.analyser.frequencyBinCount;
@@ -296,6 +367,7 @@ class AudioVisualizer {
             this.ctx.fillText("MUTED", this.canvas.width / 2, this.canvas.height / 2);
         }
     }
+
     stop() {
         cancelAnimationFrame(this.rafId);
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);

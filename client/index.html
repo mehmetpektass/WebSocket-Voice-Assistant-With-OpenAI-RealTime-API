@@ -1,26 +1,32 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Voice Assistant</title>
-  <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAI Realtime API Voice Assistant</title>
+    <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="container">
-    <h1>🤖 AI Voice Assistant</h1>
-    <div class="visualizer">
-      <canvas id="audioVisualizer"></canvas>
+    <div class="container">
+        <h1>🎤 OpenAI Realtime Voice Assistant</h1>
+        
+        <div class="controls">
+            <button id="voiceBtn"><span class="emoji">🎤</span></button>
+            <button id="muteBtn" title="Mute microphone"><span class="emoji">🔇</span></button>
+        </div>
+
+        <div id="status">Connecting...</div>
+
+        <canvas id="audioVisualizer"></canvas>
+
+        <div id="transcript"></div>
+
+        <div class="info">
+            <strong>Supported Languages:</strong> English, Spanish, Turkish, French, German, Italian<br>
+            <strong>Instructions:</strong> Click "Start Recording" and speak. The AI will respond in the same language you use.
+        </div>
     </div>
-    <div class="controls-container">
-      <div class="btn-row">
-        <button id="voiceBtn" class="voice-btn">🎤</button>
-        <button id="muteBtn" class="muteBtn" title="Mute microphone">🔇</button>
-      </div>
-    </div>
-    
-    <div class="status" id="status">Bağlantı bekleniyor...</div>
-  </div>
-  <script src="app.js"></script>
+
+    <script src="app.js"></script>
 </body>
 </html>

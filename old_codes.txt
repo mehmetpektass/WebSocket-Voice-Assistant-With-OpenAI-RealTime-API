@@ -52,7 +52,7 @@ wss.on("connection", async (ws) => {
         config: {
             inputAudioFormat: 'pcm16',
             outputAudioFormat: 'pcm16',
-            inputAudioTranscription: { model: 'whisper-1'},
+            inputAudioTranscription: { model: 'whisper-1' },
             turnDetection: {
                 type: 'server_vad',
                 threshold: 0.5,
@@ -71,25 +71,15 @@ wss.on("connection", async (ws) => {
     let isRecording = false;
 
     try {
-        //Send the sound that comes from OpenAI to client directly
-        session.on("conversation.updated", ({ delta }) => {
-            if (!isRecording && delta?.audio && ws.readyState === WebSocket.OPEN) {
-                console.log(`Sending ${delta.audio.buffer.byteLength} bytes of audio to client`);
-                ws.send(Buffer.from(delta.audio.buffer));
-            } else if (delta?.text) {
-                console.log("There is only text", delta.text);
-            }
-        });
-
         session.on("input_audio_buffer.speech_started", async () => {
-            console.log("User speech started – interrupting AI");
+            console.log("User speech started - interrupting AI");
             isRecording = true;
             try { await session.interrupt(); } catch (e) { console.log("interrupt err", e); }
-            ws.send(JSON.stringify({ type: "barge_in" }));
         });
 
-        session.on("input_audio_buffer.speech_stopped", () => {
-            console.log("User speech stopped");
+        session.on("input_audio_buffer.speech_stopped", ({delta}) => {
+            ws.send(Buffer.from(delta.audio.buffer));
+            console.log("User speech stopped, OpenAI is starting to create response.");
             isRecording = false;
         });
 
@@ -99,7 +89,7 @@ wss.on("connection", async (ws) => {
             console.log("Transport event:", event.type);
             if (event.type === 'error') {
                 console.log("Transport error:", event.error);
-            }else if (event.type === "audio_interrupted")
+            } else if (event.type === "audio_interrupted")
                 try { await session.interrupt(); } catch (e) { console.log("interrupt err", e); }
 
             // Handle audio data directly from transport events
@@ -222,7 +212,9 @@ wss.on("connection", async (ws) => {
                 console.error("Error processing message:", error);
                 ws.send(JSON.stringify({
                     type: "error",
-                    error: "Message processing failed"
+                    error: {
+                        message: "The data type is not valid."
+                    }
                 }));
             }
         });
@@ -238,7 +230,9 @@ wss.on("connection", async (ws) => {
         console.error("Error creating session:", error);
         ws.send(JSON.stringify({
             type: "error",
-            error: "Failed to create session"
+            error: {
+                message: "Failed to create session."
+            }
         }));
     }
 });
@@ -250,6 +244,8 @@ app.get("/", (req, res) => {
 server.listen(3000, () => {
     console.log("WebSocket Server listening on http://localhost:3000");
 });
+
+
 
 
 
@@ -299,9 +295,6 @@ ws.onmessage = async (e) => {
         if (msg.type === "session") {
             document.getElementById("status").textContent = "Bağlantı hazır, konuşabilirsiniz";
             console.log("Session ready");
-        } else if (msg.type === "barge_in") {
-            stopAllPlayback();
-            return;
         } else if (msg.type === "conversation_started") {
             console.log("Conversation started confirmation received");
         } else if (msg.type === "conversation_stopped") {
@@ -358,8 +351,6 @@ document.getElementById("voiceBtn").addEventListener("click", async () => {
 
         // ScriptProcessor – 16384 samples for better buffering
         processor = audioCtx.createScriptProcessor(16384, 1, 1);
-
-        stopAllPlayback();
 
         processor.onaudioprocess = (e) => {
             if (isMuted) {
@@ -513,12 +504,6 @@ function playAudio(arrayBuf) {
     activeSources.push(src);
 }
 
-function stopAllPlayback() {            // <── yeni yardımcı
-    activeSources.forEach(s => { try { s.stop(); } catch (e) { } });
-    activeSources.length = 0;   
-    playbackTime = playAudioCtx ? playAudioCtx.currentTime : 0;
-}
-
 
 let isMuted = false;
 const muteBtn = document.getElementById("muteBtn");
@@ -532,9 +517,7 @@ muteBtn.addEventListener("click", () => {
         ? "Muted (listening)"
         : "Speak";
 
-    
-        console.warn("Ws is not open, cannot send mute_state");
-      
+    console.warn("Ws is not open, cannot send mute_state");
 });
 
 
