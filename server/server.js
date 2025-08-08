@@ -149,6 +149,12 @@ wss.on("connection", async (clientWs) => {
                     }));
                     break;
 
+                case "response.audio_transcript.done":
+                    clientWs.send(JSON.stringify({
+                        type: "ai_transcript_done"
+                    }));
+                    break;
+
                 case "response.done":
                     console.log("Response completed");
                     clientWs.send(JSON.stringify({

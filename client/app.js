@@ -53,7 +53,8 @@ ws.onmessage = async (e) => {
 
             case "user_transcript":
                 console.log("User said:", msg.transcript);
-                updateTranscript("User: " + msg.transcript);
+                
+                updateTranscript(msg.transcript, true);
                 break;
 
             case "ai_transcript_delta":
@@ -61,7 +62,11 @@ ws.onmessage = async (e) => {
                     currentTranscript = "AI: ";
                 }
                 currentTranscript += msg.delta;
-                updateTranscript(currentTranscript, false);
+                break;
+
+            case "ai_transcript_done":
+                updateTranscript(currentTranscript, true);
+                currentTranscript = "";
                 break;
 
             case "response_done":
@@ -96,7 +101,7 @@ document.getElementById("voiceBtn").addEventListener("click", async () => {
     if (processor) {
         console.log("Stopping recording...");
         ws.send(JSON.stringify({ type: "stop_conversation" }));
-        
+
         // Stop recording
         processor.disconnect();
         source.disconnect();
@@ -304,6 +309,7 @@ function updateStatus(message) {
 
 function updateTranscript(text, isComplete = true) {
     const transcriptEl = document.getElementById("transcript");
+
     if (isComplete) {
         transcriptEl.innerHTML += "<div>" + text + "</div>";
     } else {
@@ -317,7 +323,6 @@ function updateTranscript(text, isComplete = true) {
     }
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
-
 class AudioVisualizer {
     constructor(canvasId) {
         this.canvas = document.getElementById(canvasId);
