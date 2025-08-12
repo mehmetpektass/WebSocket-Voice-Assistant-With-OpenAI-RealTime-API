@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 import WebSocket from "ws";
 import http from "http";
 import path from "path";
+import { emailTools, handleSendEmail, handleSendTemplateEmail } from "../tools/emailTools.js";
 
 dotenv.config();
 
@@ -31,7 +32,7 @@ wss.on("connection", async (clientWs) => {
 
     openaiWs.on("open", () => {
         console.log("Connected to OpenAI Realtime API");
-        
+
         // Configure session according to OpenAI documentation
         const sessionUpdate = {
             type: "session.update",
@@ -70,7 +71,10 @@ wss.on("connection", async (clientWs) => {
                     silence_duration_ms: 800
                 },
                 temperature: 0.8,
-                max_response_output_tokens: 4096
+                max_response_output_tokens: 4096,
+                tools: [
+                    ...emailTools,
+                ]
             }
         };
 
@@ -133,6 +137,17 @@ wss.on("connection", async (clientWs) => {
                     console.log("Content part added");
                     break;
 
+                // ===== TOOL CALL EVENTS
+                case "response.function_call_arguments.delta":
+                    console.log("Function call arguments delta:", event);
+                    break;
+
+                case "response.function_call_arguments.done":
+                    // Function arguments tamamen geldiğinde
+                    console.log("Function call arguments done:", event);
+                    handleToolCall(event);
+                    break;
+
                 case "response.audio.delta":
                     // Forward audio data to client
                     if (event.delta) {
@@ -178,6 +193,67 @@ wss.on("connection", async (clientWs) => {
         }
     });
 
+
+    async function handleToolCall(event) {
+        try {
+            const { call_id, name, arguments: args } = event;
+            const parsedArgs = JSON.parse(args);
+
+            console.log(`Executing tool: ${name} with args:`, parsedArgs);
+
+            let result;
+
+            switch (name) {
+                case "send_email":
+                    result = handleSendEmail(parsedArgs);
+                    break;
+
+                case "send_template_email":
+                    result = handleSendTemplateEmail(parsedArgs);
+                    break;
+
+                default:
+                    result = {
+                        success: false,
+                        message: `Unknown tool: ${name}`
+                    };
+            }
+
+            const toolResult = {
+                type: "conversation.item.create",
+                item: {
+                    type: "function_call_output",
+                    call_id: call_id,
+                    output: JSON.stringify(result)
+                }
+            };
+
+            openaiWs.send(JSON.stringify(toolResult));
+
+            openaiWs.send(JSON.stringify({
+                type: "response.create"
+            }));
+
+        } catch (error) {
+            console.error("Error handling tool call:", error);
+
+            const errorResult = {
+                type: "conversation.item.create",
+                item: {
+                    type: "function_call_output",
+                    call_id: event.call_id,
+                    output: JSON.stringify({
+                        success: false,
+                        message: error.message
+                    })
+                }
+            };
+
+            openaiWs.send(JSON.stringify(errorResult));
+        }
+    }
+
+
     openaiWs.on("error", (error) => {
         console.error("OpenAI WebSocket error:", error);
         clientWs.send(JSON.stringify({
@@ -208,7 +284,7 @@ wss.on("connection", async (clientWs) => {
                 }
 
                 console.log(`Forwarding ${audioBuffer.length} bytes of audio to OpenAI`);
-                
+
                 // Send audio using input_audio_buffer.append
                 const audioEvent = {
                     type: "input_audio_buffer.append",
@@ -226,7 +302,7 @@ wss.on("connection", async (clientWs) => {
             switch (data.type) {
                 case "start_conversation":
                     console.log("Starting conversation");
-                    
+
                     // Clear any existing audio buffer
                     openaiWs.send(JSON.stringify({
                         type: "input_audio_buffer.clear"

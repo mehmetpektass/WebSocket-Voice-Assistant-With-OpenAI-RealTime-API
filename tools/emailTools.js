@@ -1,4 +1,4 @@
-export const emailTool = [
+export const emailTools = [
     {
         type: "function",
         name: "send_email",
@@ -30,7 +30,7 @@ export const emailTool = [
     {
         type: "function",
         name: "send_template_email",
-        description: "Send an email using a predefined business template with full customization",
+        description: "Send an email using a predefined professional template with full customization",
         parameters: {
             type: "object",
             properties: {
@@ -91,3 +91,56 @@ export const emailTool = [
         }
     }
 ]
+
+
+export async function handleSendEmail(args) {
+    try {
+        const response = await fetch(`http://localhost:4000/send`, {
+            method: "POST",
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                to: args.to,
+                subject: args.subject,
+                text: args.text,
+                html: args.html
+            })
+        });
+
+        return await response.json();
+
+    } catch (error) {
+        console.error('Send email failed:', error);
+        return {
+            success: false,
+            message: `Email service error: ${error.message}`
+        };
+    }
+}
+
+
+export async function handleSendTemplateEmail(args) {
+    try {
+        const response = await fetch("http://localhost:4000/send-template", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                to: args.to,
+                templateData: args.templateData
+            })
+        })
+
+        return await response.json();
+
+    } catch (error) {
+        console.error('Send template email failed:', error);
+        return {
+            success: false,
+            message: `Template email service error: ${error.message}`
+        };
+    }
+
+}
